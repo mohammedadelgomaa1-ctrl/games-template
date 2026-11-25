@@ -1,0 +1,612 @@
+<!DOCTYPE html>
+<html lang="en" dir="ltr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+<meta name="theme-color" content="#0e0a1e">
+<title>The Tower</title>
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<style>
+html, body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  overflow: hidden;
+  background: #0e0a1e;
+  touch-action: none;
+  overscroll-behavior: none;
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
+  font-family: -apple-system, "Segoe UI", Tahoma, Arial, sans-serif;
+  color: #fff;
+}
+
+#game {
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+#hud {
+  position: fixed;
+  top: calc(env(safe-area-inset-top, 0px) + 12px);
+  left: 0;
+  right: 0;
+  text-align: center;
+  pointer-events: none;
+  z-index: 5;
+}
+#score {
+  font-size: 56px;
+  font-weight: 800;
+  text-shadow: 0 2px 12px rgba(0,0,0,.5);
+  line-height: 1;
+}
+#best {
+  font-size: 15px;
+  opacity: .65;
+  margin-top: 4px;
+}
+
+.screen {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 18px;
+  z-index: 10;
+  background: rgba(14, 10, 30, .55);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  padding: 24px;
+  box-sizing: border-box;
+  text-align: center;
+}
+.hidden { display: none; }
+
+.screen h1 {
+  font-size: 52px;
+  margin: 0;
+  font-weight: 800;
+  text-shadow: 0 4px 24px rgba(0,0,0,.6);
+}
+.screen p {
+  margin: 0;
+  font-size: 17px;
+  opacity: .8;
+  max-width: 320px;
+  line-height: 1.6;
+}
+
+button {
+  font-family: inherit;
+  border: none;
+  cursor: pointer;
+  border-radius: 999px;
+  color: #fff;
+}
+button.big {
+  font-size: 22px;
+  font-weight: 700;
+  padding: 16px 56px;
+  background: linear-gradient(135deg, #ff5470, #ff8a5c);
+  box-shadow: 0 8px 24px rgba(255, 84, 112, .4);
+}
+button.big:active { transform: scale(.95); }
+button.revive {
+  background: linear-gradient(135deg, #2dd4bf, #4ade80);
+  box-shadow: 0 8px 24px rgba(74, 222, 128, .35);
+}
+button.small {
+  font-size: 18px;
+  padding: 10px 16px;
+  background: rgba(255,255,255,.12);
+}
+#go-score { font-size: 72px !important; }
+
+</style>
+</head>
+<body>
+<canvas id="game"></canvas>
+
+<div id="hud">
+  <div id="score">0</div>
+  <div id="best">Best: 0</div>
+</div>
+
+<div id="overlay" class="screen">
+  <h1 id="title">The Tower</h1>
+  <p id="hint">Tap at the right moment and build the tallest tower</p>
+  <button id="btn-start" class="big" type="button">PLAY</button>
+  <button id="btn-sound" class="small" type="button">🔊</button>
+</div>
+
+<div id="gameover" class="screen hidden">
+  <h1 id="go-score">0</h1>
+  <p id="go-best">Best: 0</p>
+  <button id="btn-revive" class="big revive hidden" type="button">▶ Continue (ad)</button>
+  <button id="btn-retry" class="big" type="button">RETRY</button>
+</div>
+
+<script src="https://sdk.crazygames.com/crazygames-sdk-v3.js"></script>
+<script>
+/* ads-crazygames.js - CrazyGames SDK provider.
+ *
+ * Same window.Ads interface as ads.js, backed by the CrazyGames SDK v3:
+ *   - showInterstitial() -> requestAd('midgame')  (called every 3rd game over)
+ *   - showRewarded(cb)   -> requestAd('rewarded') (the continue button)
+ *   - gameplayStart/gameplayStop -> CrazyGames gameplay events (required by QA)
+ *
+ * Usage: load the SDK script BEFORE this file:
+ *   <script src="https://sdk.crazygames.com/crazygames-sdk-v3.js"><\/script>
+ *   <script src="js/ads-crazygames.js"><\/script>
+ * and omit js/ads.js (or load this file after it - it overrides window.Ads).
+ *
+ * The provider degrades to stub behavior when the SDK is absent
+ * (local testing) or when an ad errors, so gameplay is never blocked.
+ */
+(function () {
+  'use strict';
+
+  function CrazyGamesProvider() {
+    this.network = 'crazygames';
+    this.ready = false;
+  }
+
+  CrazyGamesProvider.prototype._sdk = function () {
+    return (typeof window.CrazyGames !== 'undefined' && window.CrazyGames.SDK) || null;
+  };
+
+  CrazyGamesProvider.prototype.init = function () {
+    var self = this;
+    var sdk = this._sdk();
+    if (!sdk) {
+      console.log('[Ads] CrazyGames SDK not found, stub mode');
+      return Promise.resolve();
+    }
+    try {
+      sdk.game.sdkGameLoadingStart();
+    } catch (e) {}
+    return sdk.init().then(function () {
+      self.ready = true;
+      try { sdk.game.sdkGameLoadingStop(); } catch (e) {}
+      console.log('[Ads] CrazyGames SDK ready');
+    }).catch(function (e) {
+      console.log('[Ads] CrazyGames SDK init failed, stub mode', e);
+      try { sdk.game.sdkGameLoadingStop(); } catch (e2) {}
+    });
+  };
+
+  CrazyGamesProvider.prototype.gameplayStart = function () {
+    var sdk = this._sdk();
+    if (sdk && this.ready) {
+      try { sdk.game.gameplayStart(); } catch (e) {}
+    }
+  };
+
+  CrazyGamesProvider.prototype.gameplayStop = function () {
+    var sdk = this._sdk();
+    if (sdk && this.ready) {
+      try { sdk.game.gameplayStop(); } catch (e) {}
+    }
+  };
+
+  CrazyGamesProvider.prototype.showInterstitial = function () {
+    var sdk = this._sdk();
+    if (!sdk || !this.ready) return Promise.resolve();
+    return new Promise(function (resolve) {
+      try {
+        sdk.ad.requestAd('midgame', {
+          adStarted: function () {},
+          adFinished: function () { resolve(); },
+          adError: function () { resolve(); }
+        });
+      } catch (e) { resolve(); }
+    });
+  };
+
+  CrazyGamesProvider.prototype.showRewarded = function (onReward) {
+    var sdk = this._sdk();
+    if (!sdk || !this.ready) {
+      // never trap the player: treat as earned like the stub
+      return Promise.resolve().then(function () { onReward(); });
+    }
+    return new Promise(function (resolve) {
+      var rewarded = false;
+      try {
+        sdk.ad.requestAd('rewarded', {
+          adStarted: function () {},
+          adFinished: function () { rewarded = true; onReward(); resolve(); },
+          adError: function () { if (!rewarded) { onReward(); } resolve(); }
+        });
+      } catch (e) { onReward(); resolve(); }
+    });
+  };
+
+  CrazyGamesProvider.prototype.isRewardedReady = function () { return true; };
+
+  window.AdsProviders = window.AdsProviders || {};
+  window.AdsProviders.CrazyGamesProvider = CrazyGamesProvider;
+  window.Ads = new CrazyGamesProvider();
+})();
+
+</script>
+<script>
+/* game.js - "البرج" (The Tower). One-touch stack game, pure logic + canvas.
+ * No DOM/screen code here; main.js wires buttons and overlays.
+ *
+ * Loop: a block slides left/right above the tower. Tap to place it.
+ * The overhanging part is sliced off and falls away; a total miss ends
+ * the run. Near-perfect placement snaps into place and builds a combo.
+ */
+(function () {
+  'use strict';
+
+  var PERFECT_TOLERANCE = 0.12; // fraction of block width that still counts as "perfect"
+  var BASE_SPEED = 2.4;         // px per frame at 60fps (scaled to screen width)
+  var SPEED_STEP = 0.14;
+  var MAX_SPEED = 10;
+  var INTERSTITIAL_EVERY = 3;   // show an interstitial every Nth game over
+
+  function Tower(canvas, opts) {
+    this.canvas = canvas;
+    this.ctx = canvas.getContext('2d');
+    this.opts = opts || {};
+    this.onGameOver = opts.onGameOver || function () {};
+    this.onScore = opts.onScore || function () {};
+    this.onEvent = opts.onEvent || function () {}; // analytics hook for later
+    this.gameOvers = 0;
+    this.soundOn = true;
+    this.best = this.loadBest();
+    this.resize();
+    this.resetRun();
+    var self = this;
+    this._loop = function (t) { self._frame(t); };
+    requestAnimationFrame(this._loop);
+  }
+
+  Tower.prototype.loadBest = function () {
+    try { return parseInt(localStorage.getItem('tower_best') || '0', 10) || 0; }
+    catch (e) { return 0; }
+  };
+  Tower.prototype.saveBest = function () {
+    try { localStorage.setItem('tower_best', String(this.best)); } catch (e) {}
+  };
+
+  Tower.prototype.resize = function () {
+    var dpr = Math.min(window.devicePixelRatio || 1, 2.5);
+    this.w = window.innerWidth;
+    this.h = window.innerHeight;
+    this.canvas.width = Math.round(this.w * dpr);
+    this.canvas.height = Math.round(this.h * dpr);
+    this.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    this.blockW = Math.min(this.w * 0.58, 280);
+    this.blockH = Math.max(18, this.blockW * 0.16);
+    this.groundY = this.h * 0.82;
+  };
+
+  Tower.prototype.resetRun = function () {
+    this.score = 0;
+    this.combo = 0;
+    this.reviveUsed = false;
+    this.blocks = [{ x: this.w / 2 - this.blockW / 2, width: this.blockW, level: 0 }];
+    this.debris = [];
+    this.flashes = [];
+    this.camera = 0;
+    this.state = 'swinging'; // swinging | over
+    this.spawnBlock();
+  };
+
+  Tower.prototype.start = function () {
+    this.resetRun();
+    this.onScore(0);
+  };
+
+  Tower.prototype.spawnBlock = function () {
+    var top = this.blocks[this.blocks.length - 1];
+    var level = this.blocks.length;
+    var fromLeft = level % 2 === 0;
+    this.current = {
+      x: fromLeft ? -top.width : this.w,
+      width: top.width,
+      dir: fromLeft ? 1 : -1,
+      speed: Math.min(BASE_SPEED + this.score * SPEED_STEP, MAX_SPEED) * (this.w / 390),
+      level: level
+    };
+    this.state = 'swinging';
+  };
+
+  Tower.prototype.tap = function () {
+    if (this.state !== 'swinging') return;
+    var c = this.current;
+    var below = this.blocks[this.blocks.length - 1];
+    var left = Math.max(c.x, below.x);
+    var right = Math.min(c.x + c.width, below.x + below.width);
+    var overlap = right - left;
+
+    if (overlap <= 0) {
+      // total miss: block tumbles off, run over
+      this.debris.push({ x: c.x, y: this.blockY(c.level), w: c.width, vy: -2, vx: c.dir * 2.4, rot: 0, vr: 0.09 * c.dir, hue: this.hue(c.level) });
+      this.endRun();
+      return;
+    }
+
+    var off = below.width - overlap; // how much hangs over
+    if (off < below.width * PERFECT_TOLERANCE) {
+      // perfect: snap, no cut, combo grows
+      left = below.x;
+      overlap = below.width;
+      this.combo++;
+      this.flashes.push({ x: left + overlap / 2, y: this.blockY(c.level), r: 10, a: 1 });
+      this.blip(600 + Math.min(this.combo, 14) * 32, 0.09);
+      this.vibrate(8);
+      this.onEvent('perfect', { combo: this.combo });
+    } else {
+      this.combo = 0;
+      var cutX = (c.x < below.x) ? left - off : right;
+      this.debris.push({ x: cutX, y: this.blockY(c.level), w: off, vy: -1, vx: (c.x < below.x ? -1.8 : 1.8), rot: 0, vr: 0.12 * (c.x < below.x ? -1 : 1), hue: this.hue(c.level) });
+      this.blip(480, 0.05);
+      this.vibrate(15);
+    }
+
+    this.blocks.push({ x: left, width: overlap, level: c.level });
+    this.score++;
+    this.onScore(this.score);
+    this.spawnBlock();
+  };
+
+  Tower.prototype.endRun = function () {
+    this.state = 'over';
+    this.gameOvers++;
+    var isNewBest = this.score > this.best;
+    if (isNewBest) { this.best = this.score; this.saveBest(); }
+    this.vibrate(80);
+    this.blip(150, 0.3);
+    this.onGameOver({
+      score: this.score,
+      best: this.best,
+      isNewBest: isNewBest,
+      canRevive: !this.reviveUsed && this.score >= 3,
+      showInterstitial: (this.gameOvers % INTERSTITIAL_EVERY) === 0
+    });
+  };
+
+  // After a rewarded ad grants the revive: keep the tower, resume.
+  Tower.prototype.revive = function () {
+    if (this.state !== 'over') return;
+    this.reviveUsed = true;
+    this.debris = [];
+    this.spawnBlock();
+  };
+
+  Tower.prototype.blockY = function (level) {
+    return this.groundY - (level + 1) * this.blockH;
+  };
+
+  Tower.prototype.hue = function (level) {
+    return (255 + level * 7) % 360;
+  };
+
+  Tower.prototype.step = function () {
+    if (this.state === 'swinging') {
+      var c = this.current;
+      c.x += c.dir * c.speed;
+      if (c.dir > 0 && c.x + c.width >= this.w) c.dir = -1;
+      if (c.dir < 0 && c.x <= 0) c.dir = 1;
+    }
+    for (var i = this.debris.length - 1; i >= 0; i--) {
+      var d = this.debris[i];
+      d.vy += 0.85;
+      d.y += d.vy;
+      d.x += d.vx;
+      d.rot += d.vr;
+      if (d.y - this.camera > this.h + 120) this.debris.splice(i, 1);
+    }
+    for (var j = this.flashes.length - 1; j >= 0; j--) {
+      var f = this.flashes[j];
+      f.r += 6;
+      f.a -= 0.06;
+      if (f.a <= 0) this.flashes.splice(j, 1);
+    }
+    // camera eases so the tower top sits ~55% up the screen
+    var topLevel = this.blocks.length - 1;
+    var want = Math.max(0, (topLevel + 2) * this.blockH - this.h * 0.42);
+    this.camera += (want - this.camera) * 0.14;
+  };
+
+  Tower.prototype.draw = function () {
+    var ctx = this.ctx, w = this.w, h = this.h;
+    var skyHue = this.hue(Math.max(0, this.blocks.length - 1));
+    var g = ctx.createLinearGradient(0, 0, 0, h);
+    g.addColorStop(0, 'hsl(' + skyHue + ', 48%, 10%)');
+    g.addColorStop(1, 'hsl(' + ((skyHue + 45) % 360) + ', 52%, 26%)');
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, w, h);
+
+    ctx.save();
+    ctx.translate(0, this.camera);
+
+    for (var i = 0; i < this.blocks.length; i++) {
+      var b = this.blocks[i];
+      this.drawBlock(b.x, this.blockY(b.level), b.width, this.hue(b.level));
+    }
+    if (this.state === 'swinging') {
+      this.drawBlock(this.current.x, this.blockY(this.current.level), this.current.width, this.hue(this.current.level));
+    }
+    for (var k = 0; k < this.debris.length; k++) {
+      var d = this.debris[k];
+      ctx.save();
+      ctx.translate(d.x + d.w / 2, d.y + this.blockH / 2);
+      ctx.rotate(d.rot);
+      ctx.fillStyle = 'hsl(' + d.hue + ', 55%, 40%)';
+      roundRect(ctx, -d.w / 2, -this.blockH / 2, d.w, this.blockH, 5);
+      ctx.fill();
+      ctx.restore();
+    }
+    for (var m = 0; m < this.flashes.length; m++) {
+      var f = this.flashes[m];
+      ctx.save();
+      ctx.globalAlpha = Math.max(0, f.a);
+      ctx.strokeStyle = '#fff';
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.arc(f.x, f.y + this.blockH / 2, f.r, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.restore();
+    }
+    ctx.restore();
+
+    // ground line
+    ctx.fillStyle = 'rgba(255,255,255,0.10)';
+    ctx.fillRect(0, this.groundY + this.camera, w, 2);
+  };
+
+  Tower.prototype.drawBlock = function (x, y, width, hue) {
+    var ctx = this.ctx, bh = this.blockH;
+    var grad = ctx.createLinearGradient(x, y, x + width, y + bh);
+    grad.addColorStop(0, 'hsl(' + hue + ', 72%, 56%)');
+    grad.addColorStop(1, 'hsl(' + ((hue + 26) % 360) + ', 66%, 44%)');
+    ctx.fillStyle = grad;
+    roundRect(ctx, x, y, width, bh, 5);
+    ctx.fill();
+    ctx.fillStyle = 'rgba(255,255,255,0.16)';
+    roundRect(ctx, x, y, width, bh * 0.32, 5);
+    ctx.fill();
+  };
+
+  function roundRect(ctx, x, y, w, h, r) {
+    r = Math.min(r, w / 2, h / 2);
+    ctx.beginPath();
+    ctx.moveTo(x + r, y);
+    ctx.arcTo(x + w, y, x + w, y + h, r);
+    ctx.arcTo(x + w, y + h, x, y + h, r);
+    ctx.arcTo(x, y + h, x, y, r);
+    ctx.arcTo(x, y, x + w, y, r);
+    ctx.closePath();
+  }
+
+  Tower.prototype._frame = function () {
+    this.step();
+    this.draw();
+    requestAnimationFrame(this._loop);
+  };
+
+  // --- tiny WebAudio blips, no assets needed ---
+  var actx = null;
+  Tower.prototype.blip = function (freq, dur) {
+    if (!this.soundOn) return;
+    try {
+      if (!actx) actx = new (window.AudioContext || window.webkitAudioContext)();
+      if (actx.state === 'suspended') actx.resume();
+      var o = actx.createOscillator(), g = actx.createGain();
+      o.type = 'sine';
+      o.frequency.value = freq;
+      g.gain.setValueAtTime(0.12, actx.currentTime);
+      g.gain.exponentialRampToValueAtTime(0.001, actx.currentTime + dur);
+      o.connect(g); g.connect(actx.destination);
+      o.start(); o.stop(actx.currentTime + dur);
+    } catch (e) {}
+  };
+
+  Tower.prototype.vibrate = function (ms) {
+    try { if (navigator.vibrate) navigator.vibrate(ms); } catch (e) {}
+  };
+
+  window.TowerGame = Tower;
+})();
+
+</script>
+<script>
+/* main.js - wires screens, input and the ad layer to the game. */
+(function () {
+  'use strict';
+
+  var canvas = document.getElementById('game');
+  var scoreEl = document.getElementById('score');
+  var bestEl = document.getElementById('best');
+  var overlay = document.getElementById('overlay');
+  var gameoverEl = document.getElementById('gameover');
+  var goScore = document.getElementById('go-score');
+  var goBest = document.getElementById('go-best');
+  var btnStart = document.getElementById('btn-start');
+  var btnRetry = document.getElementById('btn-retry');
+  var btnRevive = document.getElementById('btn-revive');
+  var btnSound = document.getElementById('btn-sound');
+
+  var game = new TowerGame(canvas, {
+    onScore: function (s) {
+      scoreEl.textContent = s;
+      bestEl.textContent = 'Best: ' + game.best;
+    },
+    onGameOver: function (res) {
+      goScore.textContent = res.score;
+      goBest.textContent = (res.isNewBest ? 'New best! ' : 'Best: ') + res.best;
+      btnRevive.classList.toggle('hidden', !res.canRevive || !window.Ads.isRewardedReady());
+      gameoverEl.classList.remove('hidden');
+      if (window.Ads.gameplayStop) window.Ads.gameplayStop();
+      if (res.showInterstitial) window.Ads.showInterstitial();
+    }
+  });
+
+  bestEl.textContent = 'Best: ' + game.best;
+
+  function startRun() {
+    overlay.classList.add('hidden');
+    gameoverEl.classList.add('hidden');
+    if (window.Ads.gameplayStart) window.Ads.gameplayStart();
+    game.start();
+  }
+
+  btnStart.addEventListener('click', startRun);
+  btnRetry.addEventListener('click', startRun);
+
+  btnRevive.addEventListener('click', function () {
+    btnRevive.disabled = true;
+    window.Ads.showRewarded(function () {
+      btnRevive.disabled = false;
+      gameoverEl.classList.add('hidden');
+      game.revive();
+    });
+  });
+
+  btnSound.addEventListener('click', function () {
+    game.soundOn = !game.soundOn;
+    btnSound.textContent = game.soundOn ? '🔊' : '🔇';
+  });
+
+  // tap anywhere (except on buttons) places the block
+  function onTap(e) {
+    if (e.target.closest('button') || e.target.closest('.screen')) return;
+    game.tap();
+  }
+  window.addEventListener('pointerdown', onTap);
+  window.addEventListener('keydown', function (e) {
+    if (e.code === 'Space' || e.code === 'Enter') {
+      if (!overlay.classList.contains('hidden')) { startRun(); return; }
+      if (!gameoverEl.classList.contains('hidden')) { startRun(); return; }
+      game.tap();
+    }
+  });
+
+  window.addEventListener('resize', function () {
+    game.resize();
+    // keep the tower horizontally consistent after rotation
+    game.camera = Math.max(0, game.camera);
+  });
+
+  window.Ads.init();
+
+  // debug/testing handle
+  window.__game = game;
+
+})();
+
+</script>
+</body>
+</html>
